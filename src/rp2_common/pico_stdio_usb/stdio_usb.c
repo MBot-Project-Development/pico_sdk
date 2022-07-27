@@ -87,6 +87,55 @@ static void stdio_usb_out_chars(const char *buf, int length) {
     mutex_exit(&stdio_usb_mutex);
 }
 
+int stdio_usb_in_chars_itf(int itf, char *buf, int length) {
+    uint32_t owner;
+    if (!mutex_try_enter(&stdio_usb_mutex, &owner)) {
+        if (owner == get_core_num()) return PICO_ERROR_NO_DATA; // would deadlock otherwise
+        mutex_enter_blocking(&stdio_usb_mutex);
+    }
+    int rc = PICO_ERROR_NO_DATA;
+    if (tud_cdc_n_connected(itf) && tud_cdc_n_available(itf)) {
+        int count = (int) tud_cdc_n_read(itf, buf, (uint32_t) length);
+        rc =  count ? count : PICO_ERROR_NO_DATA;
+    }
+    mutex_exit(&stdio_usb_mutex);
+    return rc;
+}
+
+void stdio_usb_out_chars_itf(int itf, const char *buf, int length) {
+    static uint64_t last_avail_time;
+    uint32_t owner;
+    if (!mutex_try_enter(&stdio_usb_mutex, &owner)) {
+        if (owner == get_core_num()) return; // would deadlock otherwise
+        mutex_enter_blocking(&stdio_usb_mutex);
+    }
+    if (tud_cdc_n_connected(itf)) {
+        for (int i = 0; i < length;) {
+            int n = length - i;
+            int avail = (int) tud_cdc_n_write_available(itf);
+            if (n > avail) n = avail;
+            if (n) {
+                int n2 = (int) tud_cdc_n_write(itf, buf + i, (uint32_t)n);
+                tud_task();
+                tud_cdc_n_write_flush(itf);
+                i += n2;
+                last_avail_time = time_us_64();
+            } else {
+                tud_task();
+                tud_cdc_n_write_flush(itf);
+                if (!tud_cdc_n_connected(itf) ||
+                    (!tud_cdc_n_write_available(itf) && time_us_64() > last_avail_time + PICO_STDIO_USB_STDOUT_TIMEOUT_US)) {
+                    break;
+                }
+            }
+        }
+    } else {
+        // reset our timeout
+        last_avail_time = 0;
+    }
+    mutex_exit(&stdio_usb_mutex);
+}
+
 int stdio_usb_in_chars(char *buf, int length) {
     uint32_t owner;
     if (!mutex_try_enter(&stdio_usb_mutex, &owner)) {
@@ -166,7 +215,7 @@ bool stdio_usb_init(void) {
 }
 
 bool stdio_usb_connected(void) {
-    return tud_cdc_connected();
+    return tud_cdc_n_connected(0) && tud_cdc_n_connected(1);
 }
 #else
 #warning stdio USB was configured along with user use of TinyUSB device mode, but CDC is not enabled

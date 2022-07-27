@@ -120,6 +120,10 @@ bool stdio_usb_init(void);
  *  \return true if stdio is connected over CDC
  */
 bool stdio_usb_connected(void);
+
+int stdio_usb_in_chars_itf(int itf, char *buf, int length);
+void stdio_usb_out_chars_itf(int itf, const char *buf, int length);
+
 #ifdef __cplusplus
 }
 #endif
